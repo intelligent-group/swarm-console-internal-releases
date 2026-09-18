@@ -1,0 +1,56 @@
+name: QA Gate 18 - Gitleaks Secret Scan
+
+# Scans every commit + every PR for hardcoded credentials (API keys, tokens,
+# private keys, connection strings) using gitleaks. Hard gate: any leak
+# detected fails the PR.
+#
+# Ship dispatch-only first (issue #7404): no schedule cron here yet. Prove
+# one real run lands clean on a PR/push, then a follow-up can arm a weekly
+# full-history sweep -- see memory/feedback_pilot_verify_before_arming_schedule.md.
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Scan for hardcoded secrets
+    runs-on: [self-hosted, mroot-self-hosted]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # fetch-depth: 0 required so `gitleaks detect` scans the full commit
+          # history, not just the shallow tip.
+          fetch-depth: 0
+
+      # Direct pinned gitleaks CLI install -- see swarm-console's own
+      # qa-gate-18-gitleaks.yml for why gitleaks/gitleaks-action@v2 doesn't
+      # work on this org's self-hosted runner pool (org-license-gated tool
+      # install + extractTar failure). Extracted to $RUNNER_TEMP, no sudo.
+      - name: Install gitleaks CLI (pinned)
+        run: |
+          GITLEAKS_VERSION="8.27.0"
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/gitleaks" gitleaks
+          "$RUNNER_TEMP/gitleaks/gitleaks" version
+
+      - name: Run gitleaks (hard gate)
+        # --exit-code 1 keeps this a REAL blocking scan: any detected leak
+        # fails the job (and the PR). --redact prevents the secret value
+        # itself from appearing in public logs. No `|| true`, no
+        # continue-on-error.
+        run: |
+          "$RUNNER_TEMP/gitleaks/gitleaks" detect --source . --redact --no-banner --exit-code 1
