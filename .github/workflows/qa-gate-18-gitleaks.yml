@@ -4,6 +4,14 @@ name: QA Gate 18 - Gitleaks Secret Scan
 # private keys, connection strings) using gitleaks. Hard gate: any leak
 # detected fails the PR.
 #
+# This repo is PUBLIC: the org's self-hosted runner group has
+# allows_public_repositories=false (GitHub blocks self-hosted runners on
+# public repos by design, to stop an untrusted fork PR from running arbitrary
+# code on our own hardware) -- a job requesting [self-hosted,
+# mroot-self-hosted] here queues forever with no runner ever picking it up.
+# ubuntu-latest is used instead, which is free/unlimited on public repos, so
+# this is not a billable-cost decision.
+#
 # Ship dispatch-only first (issue #7404): no schedule cron here yet. Prove
 # one real run lands clean on a PR/push, then a follow-up can arm a weekly
 # full-history sweep -- see memory/feedback_pilot_verify_before_arming_schedule.md.
@@ -22,7 +30,7 @@ concurrency:
 jobs:
   gitleaks:
     name: Scan for hardcoded secrets
-    runs-on: [self-hosted, mroot-self-hosted]
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
@@ -35,10 +43,6 @@ jobs:
           # history, not just the shallow tip.
           fetch-depth: 0
 
-      # Direct pinned gitleaks CLI install -- see swarm-console's own
-      # qa-gate-18-gitleaks.yml for why gitleaks/gitleaks-action@v2 doesn't
-      # work on this org's self-hosted runner pool (org-license-gated tool
-      # install + extractTar failure). Extracted to $RUNNER_TEMP, no sudo.
       - name: Install gitleaks CLI (pinned)
         run: |
           GITLEAKS_VERSION="8.27.0"
