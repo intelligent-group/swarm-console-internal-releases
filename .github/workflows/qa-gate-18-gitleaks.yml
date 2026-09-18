@@ -1,0 +1,60 @@
+name: QA Gate 18 - Gitleaks Secret Scan
+
+# Scans every commit + every PR for hardcoded credentials (API keys, tokens,
+# private keys, connection strings) using gitleaks. Hard gate: any leak
+# detected fails the PR.
+#
+# This repo is PUBLIC: the org's self-hosted runner group has
+# allows_public_repositories=false (GitHub blocks self-hosted runners on
+# public repos by design, to stop an untrusted fork PR from running arbitrary
+# code on our own hardware) -- a job requesting [self-hosted,
+# mroot-self-hosted] here queues forever with no runner ever picking it up.
+# ubuntu-latest is used instead, which is free/unlimited on public repos, so
+# this is not a billable-cost decision.
+#
+# Ship dispatch-only first (issue #7404): no schedule cron here yet. Prove
+# one real run lands clean on a PR/push, then a follow-up can arm a weekly
+# full-history sweep -- see memory/feedback_pilot_verify_before_arming_schedule.md.
+
+on:
+  pull_request:
+    branches: [main, master]
+  push:
+    branches: [main, master]
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Scan for hardcoded secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # fetch-depth: 0 required so `gitleaks detect` scans the full commit
+          # history, not just the shallow tip.
+          fetch-depth: 0
+
+      - name: Install gitleaks CLI (pinned)
+        run: |
+          GITLEAKS_VERSION="8.27.0"
+          mkdir -p "$RUNNER_TEMP/gitleaks"
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/gitleaks" gitleaks
+          "$RUNNER_TEMP/gitleaks/gitleaks" version
+
+      - name: Run gitleaks (hard gate)
+        # --exit-code 1 keeps this a REAL blocking scan: any detected leak
+        # fails the job (and the PR). --redact prevents the secret value
+        # itself from appearing in public logs. No `|| true`, no
+        # continue-on-error.
+        run: |
+          "$RUNNER_TEMP/gitleaks/gitleaks" detect --source . --redact --no-banner --exit-code 1
